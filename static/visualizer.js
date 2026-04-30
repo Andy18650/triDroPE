@@ -67,10 +67,13 @@ function drawConnector(parent, points, opts) {
   var dashed = opts.dashed || false;
   var color  = opts.color || (dashed ? C.residual : C.arrow);
   var arrow  = opts.arrow !== false;
+  var horizontal = opts.start_horizontal || false;
 
-  var d = '';
-  for (var i = 0; i < points.length; i += 2) {
-    d += (i === 0 ? 'M' : 'L') + points[i] + ',' + points[i+1];
+  var d = 'M'+points[0]+','+points[1];
+  // d += 'L'+points[0]+','+(points[1]+30);
+  for (var i = 2; i < points.length; i += 1) {
+    d += (horizontal ? 'H' : 'V') + points[i];
+    horizontal = !horizontal;
   }
 
   parent.appendChild(S('path', {
@@ -79,23 +82,23 @@ function drawConnector(parent, points, opts) {
     'stroke-dasharray': dashed ? '6,4' : 'none'
   }));
 
-  if (arrow && points.length >= 4) {
-    var n = points.length;
-    var sx = points[n-4], sy = points[n-3];
-    var ex = points[n-2], ey = points[n-1];
-    var dx = ex - sx, dy = ey - sy;
-    var len = Math.sqrt(dx*dx + dy*dy);
-    if (len < 1) return;
-    dx /= len; dy /= len;
-    var px = -dy * 5, py = dx * 5;
-    parent.appendChild(S('polygon', {
-      points:
-        (ex - dx*8 + px) + ',' + (ey - dy*8 + py) + ' ' +
-        (ex - dx*8 - px) + ',' + (ey - dy*8 - py) + ' ' +
-        ex + ',' + ey,
-      fill: color, 'class': 'connector'
-    }));
-  }
+  // if (arrow && points.length >= 4) {
+  //   var n = points.length;
+  //   var sx = points[n-4], sy = points[n-3];
+  //   var ex = points[n-2], ey = points[n-1];
+  //   var dx = ex - sx, dy = ey - sy;
+  //   var len = Math.sqrt(dx*dx + dy*dy);
+  //   if (len < 1) return;
+  //   dx /= len; dy /= len;
+  //   var px = -dy * 5, py = dx * 5;
+  //   parent.appendChild(S('polygon', {
+  //     points:
+  //       (ex - dx*8 + px) + ',' + (ey - dy*8 + py) + ' ' +
+  //       (ex - dx*8 - px) + ',' + (ey - dy*8 - py) + ' ' +
+  //       ex + ',' + ey,
+  //     fill: color, 'class': 'connector'
+  //   }));
+  // }
 }
 
 // ─── Tooltip ───
@@ -313,30 +316,30 @@ function renderMLP(svg, moduleNode) {
 
   g.appendChild(makeBlock({x: lX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'gate_proj', node: gate}));
   g.appendChild(makeBlock({x: rX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'up_proj',   node: up}));
-  drawConnector(g, [cx, cy - 8, lX, cy], {arrow: false});
-  drawConnector(g, [cx, cy - 8, rX, cy], {arrow: false});
+  drawConnector(g, [cx, cy - 8, cy - 4 , lX, cy], {arrow: false, start_horizontal: false});
+  drawConnector(g, [cx, cy - 8, cy - 4 , rX, cy], {arrow: false, start_horizontal: false});
   var projBot = cy + bh;
   cy += bh + gapY;
 
   var siluW = 80, siluH = 34;
   g.appendChild(makeBlock({x: lX - siluW/2, y: cy, w: siluW, h: siluH, color: '#607d8b', label: 'SiLU', node: null}));
-  drawConnector(g, [lX, projBot, lX, cy]);
+  // drawConnector(g, [lX, projBot, lX, cy]);
   var siluBot = cy + siluH;
   cy += siluH + gapY;
 
-  drawConnector(g, [rX, projBot, rX, cy - gapY + siluH], {arrow: false});
+  // drawConnector(g, [rX, projBot, rX, cy - gapY + siluH], {arrow: false});
 
   var mulX = cx - 60, mulCY = cy + 12;
   g.appendChild(S('circle', {cx: mulX, cy: mulCY, r: 13, fill: C.adder, stroke: '#bdbdbd', 'stroke-width': 1}));
   var mt = S('text', {x: mulX, y: mulCY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
   mt.textContent = '\u00D7'; g.appendChild(mt);
 
-  drawConnector(g, [lX, siluBot, lX, mulCY, mulX - 13, mulCY]);
-  drawConnector(g, [rX, siluBot, rX, mulCY, mulX + 13, mulCY], {arrow: false});
+  // drawConnector(g, [lX, siluBot, lX, mulCY, mulX - 13, mulCY]);
+  // drawConnector(g, [rX, siluBot, rX, mulCY, mulX + 13, mulCY], {arrow: false});
   cy += 28 + gapY;
 
   g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'down_proj', node: down}));
-  drawConnector(g, [mulX, mulCY + 13, cx, mulCY + 13, cx, cy]);
+  // drawConnector(g, [mulX, mulCY + 13, cx, mulCY + 13, cx, cy]);
   cy += bh + 16;
 
   var outLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
