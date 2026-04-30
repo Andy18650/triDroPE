@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qwen3 Architecture Visualizer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; display: flex; flex-direction: column; height: 100vh; }
+#toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+#toolbar select { background: #1a1a2e; color: #e0e0e0; border: 1px solid #0f3460; border-radius: 4px; padding: 4px 8px; font-size: 14px; }
+#breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+#breadcrumb span.link { cursor: pointer; color: #64b5f6; }
+#breadcrumb span.link:hover { text-decoration: underline; }
+#breadcrumb span.cur { color: #e0e0e0; }
+#breadcrumb span.sep { color: #666; }
+#svg-container { flex: 1; overflow: auto; min-height: 200px; }
+svg { display: block; margin: 0 auto; }
+.block { cursor: pointer; transition: filter 0.15s; }
+.block:hover { filter: brightness(1.35); }
+#tooltip { position: fixed; pointer-events: none; background: #2d2d44; border: 1px solid #555; border-radius: 6px; padding: 6px 10px; font-size: 13px; line-height: 1.5; display: none; z-index: 1000; white-space: nowrap; }
+#tooltip .tt-in  { color: #66bb6a; }
+#tooltip .tt-out { color: #ffa726; }
+#error-msg { color: #ef5350; font-size: 14px; padding: 20px; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <select id="model-select">
+    <option value="4b">Qwen3-4B</option>
+    <option value="8b">Qwen3-8B</option>
+  </select>
+  <div id="breadcrumb"><span class="cur">Model</span></div>
+</div>
+
+<div id="svg-container"><div id="error-msg"></div><svg id="main-svg"></svg></div>
+
+<div id="tooltip">
+  <div class="tt-in">input: <span id="tt-in"></span></div>
+  <div class="tt-out">output: <span id="tt-out"></span></div>
+</div>
+
+<script>
+// ─── State ───
+let data = null;
+let viewPath = [];
+const TOOLTIP = document.getElementById('tooltip');
+const TT_IN   = document.getElementById('tt-in');
+const TT_OUT  = document.getElementById('tt-out');
+const ERR_MSG = document.getElementById('error-msg');
+
+function showError(msg) {
+  ERR_MSG.textContent = 'Error: ' + msg;
+}
+
+// ─── Colors ───
+const C = {
+  embed: '#607d8b',  layer: '#42a5f5',  self_attn: '#66bb6a',
+  mlp: '#ffa726',    norm: '#ab47bc',   proj: '#90caf9',
+  t_norm: '#ce93d8', t_mlp: '#ffcc80',  t_sattn: '#a5d6a7',
+  lm_head: '#607d8b', adder: '#ffee58', adder_text: '#4e342e',
+  residual: '#78909c', arrow: '#78909c',
+};
+
+// ─── Enrich ───
+function enrichNode(node, hiddenSize) {
+  if (node.type === 'tensor') return;
+  if (node.type === 'module' || node.type === 'layer') {
+    node.input_dim = hiddenSize;
+    node.output_dim = hiddenSize;
+    if (node.children) node.children.forEach(c => enrichNode(c, hiddenSize));
+  }
+}
+
+// ─── SVG builders ───
+function S(tag, attrs) {
+  var el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (var k in attrs) el.setAttribute(k, String(attrs[k]));
+  return el;
+}
+
+function makeBlock(opts) {
+  var g = S('g', {'class': 'block'});
+  g.appendChild(S('rect', {
+    x: opts.x, y: opts.y, width: opts.w, height: opts.h,
+    rx: 6, ry: 6, fill: opts.color, stroke: '#000', 'stroke-width': 1
+  }));
+  var t = S('text', {
+    x: opts.x + opts.w/2, y: opts.y + opts.h/2 + 1,
+    'text-anchor': 'middle', 'dominant-baseline': 'middle',
+    fill: '#fff', 'font-size': 12, 'font-weight': 'bold'
+  });
+  t.textContent = opts.label;
+  g.appendChild(t);
+
+  if (opts.node && opts.onClick) {
+    g.addEventListener('click', function(ev) { ev.stopPropagation(); opts.onClick(opts.node); });
+  }
+  if (opts.node) {
+    g.addEventListener('mouseenter', function(ev) { showTooltip(ev, opts.node); });
+    g.addEventListener('mousemove',  function(ev) { moveTooltip(ev); });
+    g.addEventListener('mouseleave', hideTooltip);
+  }
+  return g;
+}
+
+// Horizontal arrow (left → right)
+function arrowH(parent, x1, y1, x2, y2, dashed) {
+  var c = dashed ? C.residual : C.arrow;
+  parent.appendChild(S('line', {x1: x1, y1: y1, x2: x2 - 8, y2: y1, stroke: c, 'stroke-width': 2, 'class': 'connector', 'stroke-dasharray': dashed ? '6,4' : 'none'}));
+  parent.appendChild(S('polygon', {points: (x2-5)+','+(y2-4)+' '+(x2+5)+','+(y2-4)+' '+(x2)+','+(y2+4), fill: c, 'class': 'connector'}));
+}
+
+// Vertical arrow (top → bottom)
+function arrowV(parent, x1, y1, x2, y2, dashed) {
+  var c = dashed ? C.residual : C.arrow;
+  parent.appendChild(S('line', {x1: x1, y1: y1, x2: x2, y2: y2 - 8, stroke: c, 'stroke-width': 2, 'class': 'connector', 'stroke-dasharray': dashed ? '6,4' : 'none'}));
+  parent.appendChild(S('polygon', {points: (x2-5)+','+(y2-10)+' '+(x2+5)+','+(y2-10)+' '+x2+','+y2, fill: c, 'class': 'connector'}));
+}
+
+function pathEl(parent, d, dashed, color) {
+  var c = color || (dashed ? C.residual : C.arrow);
+  parent.appendChild(S('path', {d: d, stroke: c, 'stroke-width': 2, fill: 'none', 'class': 'connector', 'stroke-dasharray': dashed ? '6,4' : 'none'}));
+}
+
+// ─── Tooltip ───
+function showTooltip(ev, node) {
+  if (node && node.input_dim != null && node.output_dim != null) {
+    TT_IN.textContent = node.input_dim;
+    TT_OUT.textContent = node.output_dim;
+    TOOLTIP.style.display = 'block';
+    TOOLTIP.style.left = (ev.pageX + 14) + 'px';
+    TOOLTIP.style.top  = (ev.pageY - 24) + 'px';
+  }
+}
+function moveTooltip(ev) {
+  TOOLTIP.style.left = (ev.pageX + 14) + 'px';
+  TOOLTIP.style.top  = (ev.pageY - 24) + 'px';
+}
+function hideTooltip() { TOOLTIP.style.display = 'none'; }
+
+// ─── Render: Top Level ───
+function renderTopLevel(svg, nodes) {
+  var blockW = 68, blockH = 40, gap = 8;
+  var totalW = nodes.length * (blockW + gap) + 80;
+  var H = 100;
+  svg.setAttribute('width', totalW);
+  svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', '0 0 ' + totalW + ' ' + H);
+
+  var g = S('g');
+  var y = (H - blockH) / 2;
+  var cx = 40, prevCX = null;
+
+  nodes.forEach(function(node) {
+    var color = C.embed;
+    if (node.type === 'layer')            color = C.layer;
+    else if (node.name === 'final_norm')  color = C.norm;
+    else if (node.name === 'lm_head')     color = C.lm_head;
+
+    var label = node.name;
+    if (node.type === 'layer') label = 'L' + node.index;
+
+    g.appendChild(makeBlock({
+      x: cx, y: y, w: blockW, h: blockH, color: color, label: label, node: node,
+      onClick: function(n) { if (n.type === 'layer') zoomTo([n.index]); }
+    }));
+
+    if (prevCX != null) {
+      arrowH(g, prevCX + blockW, y + blockH/2, cx, y + blockH/2, false);
+    }
+    prevCX = cx;
+    cx += blockW + gap;
+  });
+
+  svg.appendChild(g);
+}
+
+// ─── Render: Layer Internal ───
+function renderLayer(svg, layerNode) {
+  var W = 740, H = 700;
+  svg.setAttribute('width', W);
+  svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+  var g = S('g'), cx = W/2;
+  var hidden = layerNode.input_dim;
+  var bw = 170, bh = 44, gap = 44;
+  var resX = 50;
+
+  var inputLN  = layerNode.children.find(function(c) { return c.name === 'input_layernorm'; });
+  var selfAttn = layerNode.children.find(function(c) { return c.name === 'self_attn'; });
+  var postLN   = layerNode.children.find(function(c) { return c.name === 'post_attention_layernorm'; });
+  var mlp      = layerNode.children.find(function(c) { return c.name === 'mlp'; });
+
+  var cy = 30;
+
+  // Input label
+  var inLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 13});
+  inLbl.textContent = 'input  (' + hidden + ')';
+  g.appendChild(inLbl);
+  cy += 15;
+  var inputTop = cy;
+
+  // input_layernorm
+  g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.norm, label: 'input_layernorm', node: inputLN}));
+  var ln1Bot = cy + bh;
+  cy += bh + gap;
+
+  // self_attn
+  g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.self_attn, label: 'self_attn', node: selfAttn, onClick: function() { zoomTo([viewPath[0], 'self_attn']); }}));
+  var saBot = cy + bh;
+  cy += bh + gap;
+
+  // adder 1
+  var add1CY = cy + 12;
+  g.appendChild(S('circle', {cx: cx, cy: add1CY, r: 12, fill: C.adder, stroke: '#bdbdbd', 'stroke-width': 1}));
+  var a1t = S('text', {x: cx, y: add1CY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
+  a1t.textContent = '+'; g.appendChild(a1t);
+
+  // residual 1
+  pathEl(g, 'M' + resX + ',' + inputTop + ' L' + resX + ',' + add1CY + ' L' + (cx-12) + ',' + add1CY, true);
+  var r1 = S('text', {x: resX - 8, y: (inputTop + add1CY)/2 + 4, 'text-anchor': 'end', fill: C.residual, 'font-size': 11, 'font-style': 'italic'});
+  r1.textContent = 'residual'; g.appendChild(r1);
+
+  cy += 28;
+
+  // post_attention_layernorm
+  g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.norm, label: 'post_attn_layernorm', node: postLN}));
+  var ln2Bot = cy + bh;
+  cy += bh + gap;
+
+  // mlp
+  g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.mlp, label: 'mlp', node: mlp, onClick: function() { zoomTo([viewPath[0], 'mlp']); }}));
+  var mlpBot = cy + bh;
+  cy += bh + gap;
+
+  // adder 2
+  var add2CY = cy + 12;
+  g.appendChild(S('circle', {cx: cx, cy: add2CY, r: 12, fill: C.adder, stroke: '#bdbdbd', 'stroke-width': 1}));
+  var a2t = S('text', {x: cx, y: add2CY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
+  a2t.textContent = '+'; g.appendChild(a2t);
+
+  // residual 2
+  pathEl(g, 'M' + resX + ',' + add1CY + ' L' + resX + ',' + add2CY + ' L' + (cx-12) + ',' + add2CY, true);
+  var r2 = S('text', {x: resX - 8, y: (add1CY + add2CY)/2 + 4, 'text-anchor': 'end', fill: C.residual, 'font-size': 11, 'font-style': 'italic'});
+  r2.textContent = 'residual'; g.appendChild(r2);
+
+  // vertical arrows
+  arrowV(g, cx, ln1Bot, cx, saBot - bh, false);
+  arrowV(g, cx, saBot, cx, add1CY - 12, false);
+  arrowV(g, cx, add1CY + 12, cx, ln2Bot - bh, false);
+  arrowV(g, cx, ln2Bot, cx, mlpBot - bh, false);
+  arrowV(g, cx, mlpBot, cx, add2CY - 12, false);
+
+  // Output label
+  var outLblY = add2CY + 24;
+  var outLbl = S('text', {x: cx, y: outLblY, 'text-anchor': 'middle', fill: '#888', 'font-size': 13});
+  outLbl.textContent = 'output  (' + hidden + ')';
+  g.appendChild(outLbl);
+  arrowV(g, cx, add2CY + 12, cx, outLblY - 12, false);
+
+  svg.appendChild(g);
+}
+
+// ─── Render: Self-Attention Internals ───
+function renderSelfAttn(svg, moduleNode) {
+  var W = 750, H = 380;
+  svg.setAttribute('width', W);
+  svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+  var g = S('g'), cx = W/2;
+  var children = moduleNode.children;
+  var qProj = children.find(function(c) { return c.name === 'q_proj'; });
+  var kProj = children.find(function(c) { return c.name === 'k_proj'; });
+  var vProj = children.find(function(c) { return c.name === 'v_proj'; });
+  var oProj = children.find(function(c) { return c.name === 'o_proj'; });
+  var qNorm = children.find(function(c) { return c.name === 'q_norm'; });
+  var kNorm = children.find(function(c) { return c.name === 'k_norm'; });
+
+  var bw = 124, bh = 34, gapY = 24;
+  var bX = [cx - 210, cx, cx + 210];
+  var projs = [qProj, kProj, vProj];
+  var norms = [qNorm, kNorm, null];
+
+  var cy = 25;
+  var inLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
+  inLbl.textContent = 'input (from layernorm)'; g.appendChild(inLbl);
+  cy = 48;
+
+  // Projection row
+  var projTop = cy;
+  bX.forEach(function(bx, i) {
+    g.appendChild(makeBlock({x: bx - bw/2, y: cy, w: bw, h: bh, color: C.t_sattn, label: projs[i].name, node: projs[i]}));
+    pathEl(g, 'M' + cx + ',' + projTop + ' L' + bx + ',' + cy, false);
+  });
+  cy += bh + gapY;
+
+  // Q/K norm row
+  var normTop = cy;
+  bX.forEach(function(bx, i) {
+    if (norms[i]) {
+      g.appendChild(makeBlock({x: bx - bw/2, y: cy, w: bw - 24, h: bh, color: C.norm, label: norms[i].name, node: norms[i]}));
+      arrowV(g, bx, normTop - gapY, bx, cy, false);
+    }
+  });
+  cy += bh + gapY;
+
+  // V line goes straight down
+  pathEl(g, 'M' + bX[2] + ',' + (projTop + bh) + ' L' + bX[2] + ',' + cy, false);
+
+  // SDPA box
+  var sdpaW = 220, sdpaH = 42;
+  g.appendChild(makeBlock({x: cx - sdpaW/2, y: cy, w: sdpaW, h: sdpaH, color: '#607d8b', label: 'Scaled Dot-Product Attention', node: null}));
+  for (var i = 0; i < 3; i++) {
+    var srcY = norms[i] ? cy - gapY : projTop + bh;
+    pathEl(g, 'M' + bX[i] + ',' + srcY + ' L' + bX[i] + ',' + (srcY + 10) + ' L' + cx + ',' + cy, false);
+  }
+  cy += sdpaH + gapY;
+
+  // o_proj
+  g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.proj, label: oProj.name, node: oProj}));
+  arrowV(g, cx, cy - gapY, cx, cy, false);
+  cy += bh + 16;
+
+  var outLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
+  outLbl.textContent = 'output  (' + oProj.output_dim + ')'; g.appendChild(outLbl);
+
+  svg.appendChild(g);
+}
+
+// ─── Render: MLP Internals ───
+function renderMLP(svg, moduleNode) {
+  var W = 660, H = 400;
+  svg.setAttribute('width', W);
+  svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+  var g = S('g'), cx = W/2;
+  var children = moduleNode.children;
+  var gate = children.find(function(c) { return c.name === 'gate_proj'; });
+  var up   = children.find(function(c) { return c.name === 'up_proj'; });
+  var down = children.find(function(c) { return c.name === 'down_proj'; });
+
+  var bw = 130, bh = 34, gapY = 24;
+  var lX = cx - 140, rX = cx + 140;
+
+  var cy = 25;
+  var inLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
+  inLbl.textContent = 'input (from layernorm)'; g.appendChild(inLbl);
+  cy = 48;
+
+  // gate_proj + up_proj
+  g.appendChild(makeBlock({x: lX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'gate_proj', node: gate}));
+  g.appendChild(makeBlock({x: rX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'up_proj',   node: up}));
+  pathEl(g, 'M' + cx + ',' + (cy - 8) + ' L' + lX + ',' + cy, false);
+  pathEl(g, 'M' + cx + ',' + (cy - 8) + ' L' + rX + ',' + cy, false);
+  var projBot = cy + bh;
+  cy += bh + gapY;
+
+  // SiLU
+  var siluW = 80, siluH = 34;
+  g.appendChild(makeBlock({x: lX - siluW/2, y: cy, w: siluW, h: siluH, color: '#607d8b', label: 'SiLU', node: null}));
+  arrowV(g, lX, projBot, lX, cy, false);
+  var siluBot = cy + siluH;
+  cy += siluH + gapY;
+
+  // Up branch passthrough
+  pathEl(g, 'M' + rX + ',' + projBot + ' L' + rX + ',' + (cy - gapY + siluH), false);
+
+  // × multiply
+  var mulX = cx - 60, mulCY = cy + 12;
+  g.appendChild(S('circle', {cx: mulX, cy: mulCY, r: 13, fill: C.adder, stroke: '#bdbdbd', 'stroke-width': 1}));
+  var mt = S('text', {x: mulX, y: mulCY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
+  mt.textContent = '\u00D7'; g.appendChild(mt);
+  arrowV(g, lX, siluBot, mulX - 13, mulCY, false);
+  pathEl(g, 'M' + rX + ',' + siluBot + ' L' + rX + ',' + mulCY + ' L' + (mulX + 13) + ',' + mulCY, false);
+  cy += 28 + gapY;
+
+  // down_proj
+  g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'down_proj', node: down}));
+  arrowV(g, mulX, mulCY + 13, cx, cy, false);
+  cy += bh + 16;
+
+  var outLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
+  outLbl.textContent = 'output  (' + down.output_dim + ')'; g.appendChild(outLbl);
+
+  svg.appendChild(g);
+}
+
+// ─── Main Render ───
+function render() {
+  var svg = document.getElementById('main-svg');
+  svg.innerHTML = '';
+
+  if (!data) return;
+
+  try {
+    if (viewPath.length === 0) {
+      renderTopLevel(svg, data.nodes);
+    } else if (viewPath.length === 1) {
+      var layerNode = null;
+      for (var j = 1; j < data.nodes.length - 1; j++) {
+        if (data.nodes[j].index === viewPath[0]) { layerNode = data.nodes[j]; break; }
+      }
+      if (layerNode) renderLayer(svg, layerNode);
+    } else if (viewPath.length === 2) {
+      var ln = null;
+      for (var k = 1; k < data.nodes.length - 1; k++) {
+        if (data.nodes[k].index === viewPath[0]) { ln = data.nodes[k]; break; }
+      }
+      if (!ln) return;
+      var mod = null;
+      for (var m = 0; m < ln.children.length; m++) {
+        if (ln.children[m].name === viewPath[1]) { mod = ln.children[m]; break; }
+      }
+      if (!mod) return;
+      if (viewPath[1] === 'self_attn') renderSelfAttn(svg, mod);
+      else if (viewPath[1] === 'mlp') renderMLP(svg, mod);
+    }
+  } catch(e) {
+    showError(e.message || String(e));
+  }
+
+  updateBreadcrumb();
+}
+
+// ─── Breadcrumb ───
+function updateBreadcrumb() {
+  var bc = document.getElementById('breadcrumb');
+  var html = '<span class="link" onclick="zoomTo([])">Model</span>';
+  if (viewPath.length >= 1) {
+    html += '<span class="sep">&gt;</span>';
+    html += '<span class="link" onclick="zoomTo([' + viewPath[0] + '])">Layer ' + viewPath[0] + '</span>';
+  }
+  if (viewPath.length >= 2) {
+    html += '<span class="sep">&gt;</span>';
+    html += '<span class="cur">' + viewPath[1] + '</span>';
+  }
+  bc.innerHTML = html;
+}
+
+// ─── Zoom navigation ───
+function zoomTo(path) {
+  viewPath = path;
+  ERR_MSG.textContent = '';
+  render();
+}
+
+// Background click → zoom out
+document.getElementById('main-svg').addEventListener('click', function(ev) {
+  if (ev.target.id === 'main-svg' && viewPath.length > 0) zoomTo(viewPath.slice(0, -1));
+});
+
+document.getElementById('svg-container').addEventListener('click', function(ev) {
+  if (ev.target.id === 'svg-container' && viewPath.length > 0) zoomTo(viewPath.slice(0, -1));
+});
+
+// ─── Fetch & Init ───
+function loadArchitecture(model) {
+  fetch('/api/architecture?model=' + model)
+    .then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    })
+    .then(function(json) {
+      data = json;
+      if (data.hidden_size) {
+        data.nodes.forEach(function(n) { enrichNode(n, data.hidden_size); });
+      }
+      viewPath = [];
+      ERR_MSG.textContent = '';
+      render();
+    })
+    .catch(function(err) {
+      showError(err.message || String(err));
+    });
+}
+
+document.getElementById('model-select').addEventListener('change', function(e) {
+  loadArchitecture(e.target.value);
+});
+
+loadArchitecture('4b');
+</script>
+</body>
+</html>
