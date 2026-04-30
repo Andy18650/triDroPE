@@ -61,17 +61,18 @@ function makeBlock(opts) {
   return g;
 }
 
-// ─── Unified connector: points = [x1, y1, x2, y2, ...] ───
+// ─── Unified connector ───
+// points = [startX, startY, ...chain...]  where the chain alternates between
+// V (y-coordinate) and H (x-coordinate) segments. The first segment after
+// the start is V by default; set start_horizontal: true to begin with H.
 function drawConnector(parent, points, opts) {
   opts = opts || {};
   var dashed = opts.dashed || false;
   var color  = opts.color || (dashed ? C.residual : C.arrow);
-  var arrow  = opts.arrow !== false;
   var horizontal = opts.start_horizontal || false;
 
-  var d = 'M'+points[0]+','+points[1];
-  // d += 'L'+points[0]+','+(points[1]+30);
-  for (var i = 2; i < points.length; i += 1) {
+  var d = 'M' + points[0] + ',' + points[1];
+  for (var i = 2; i < points.length; i++) {
     d += (horizontal ? 'H' : 'V') + points[i];
     horizontal = !horizontal;
   }
@@ -81,24 +82,6 @@ function drawConnector(parent, points, opts) {
     'class': 'connector', 'stroke-linejoin': 'round',
     'stroke-dasharray': dashed ? '6,4' : 'none'
   }));
-
-  // if (arrow && points.length >= 4) {
-  //   var n = points.length;
-  //   var sx = points[n-4], sy = points[n-3];
-  //   var ex = points[n-2], ey = points[n-1];
-  //   var dx = ex - sx, dy = ey - sy;
-  //   var len = Math.sqrt(dx*dx + dy*dy);
-  //   if (len < 1) return;
-  //   dx /= len; dy /= len;
-  //   var px = -dy * 5, py = dx * 5;
-  //   parent.appendChild(S('polygon', {
-  //     points:
-  //       (ex - dx*8 + px) + ',' + (ey - dy*8 + py) + ' ' +
-  //       (ex - dx*8 - px) + ',' + (ey - dy*8 - py) + ' ' +
-  //       ex + ',' + ey,
-  //     fill: color, 'class': 'connector'
-  //   }));
-  // }
 }
 
 // ─── Tooltip ───
@@ -146,7 +129,7 @@ function renderTopLevel(svg, nodes) {
 
     if (prevCY != null) {
       var mx = cx + blockW / 2;
-      drawConnector(g, [mx, prevCY + blockH, mx, cy]);
+      drawConnector(g, [mx, prevCY + blockH, cy]);
     }
     prevCY = cy;
     cy += blockH + gap;
@@ -193,7 +176,7 @@ function renderLayer(svg, layerNode) {
   var a1t = S('text', {x: cx, y: add1CY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
   a1t.textContent = '+'; g.appendChild(a1t);
 
-  drawConnector(g, [resX, inputTop, resX, add1CY, cx - 12, add1CY], {dashed: true, arrow: false});
+  drawConnector(g, [resX, inputTop, add1CY, cx - 12], {dashed: true});
   var r1 = S('text', {x: resX - 8, y: (inputTop + add1CY)/2 + 4, 'text-anchor': 'end', fill: C.residual, 'font-size': 11, 'font-style': 'italic'});
   r1.textContent = 'residual'; g.appendChild(r1);
 
@@ -212,21 +195,21 @@ function renderLayer(svg, layerNode) {
   var a2t = S('text', {x: cx, y: add2CY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
   a2t.textContent = '+'; g.appendChild(a2t);
 
-  drawConnector(g, [resX, add1CY, resX, add2CY, cx - 12, add2CY], {dashed: true, arrow: false});
+  drawConnector(g, [resX, add1CY, add2CY, cx - 12], {dashed: true});
   var r2 = S('text', {x: resX - 8, y: (add1CY + add2CY)/2 + 4, 'text-anchor': 'end', fill: C.residual, 'font-size': 11, 'font-style': 'italic'});
   r2.textContent = 'residual'; g.appendChild(r2);
 
-  drawConnector(g, [cx, ln1Bot,    cx, saBot - bh]);
-  drawConnector(g, [cx, saBot,     cx, add1CY - 12]);
-  drawConnector(g, [cx, add1CY+12, cx, ln2Bot - bh]);
-  drawConnector(g, [cx, ln2Bot,    cx, mlpBot - bh]);
-  drawConnector(g, [cx, mlpBot,    cx, add2CY - 12]);
+  drawConnector(g, [cx, ln1Bot,    saBot - bh]);
+  drawConnector(g, [cx, saBot,     add1CY - 12]);
+  drawConnector(g, [cx, add1CY+12, ln2Bot - bh]);
+  drawConnector(g, [cx, ln2Bot,    mlpBot - bh]);
+  drawConnector(g, [cx, mlpBot,    add2CY - 12]);
 
   var outLblY = add2CY + 24;
   var outLbl = S('text', {x: cx, y: outLblY, 'text-anchor': 'middle', fill: '#888', 'font-size': 13});
   outLbl.textContent = 'output  (' + hidden + ')';
   g.appendChild(outLbl);
-  drawConnector(g, [cx, add2CY+12, cx, outLblY - 12]);
+  drawConnector(g, [cx, add2CY+12, outLblY - 12]);
 
   svg.appendChild(g);
 }
@@ -260,7 +243,7 @@ function renderSelfAttn(svg, moduleNode) {
   var projTop = cy;
   bX.forEach(function(bx, i) {
     g.appendChild(makeBlock({x: bx - bw/2, y: cy, w: bw, h: bh, color: C.t_sattn, label: projs[i].name, node: projs[i]}));
-    drawConnector(g, [cx, projTop, bx, cy], {arrow: false});
+    drawConnector(g, [cx, projTop, projTop + 10, bx, cy], {arrow: false});
   });
   cy += bh + gapY;
 
@@ -268,23 +251,23 @@ function renderSelfAttn(svg, moduleNode) {
   bX.forEach(function(bx, i) {
     if (norms[i]) {
       g.appendChild(makeBlock({x: bx - bw/2, y: cy, w: bw - 24, h: bh, color: C.norm, label: norms[i].name, node: norms[i]}));
-      drawConnector(g, [bx, normTop - gapY, bx, cy]);
+      drawConnector(g, [bx, normTop - gapY, cy]);
     }
   });
   cy += bh + gapY;
 
-  drawConnector(g, [bX[2], projTop + bh, bX[2], cy], {arrow: false});
+  drawConnector(g, [bX[2], projTop + bh, cy], {arrow: false});
 
   var sdpaW = 220, sdpaH = 42;
   g.appendChild(makeBlock({x: cx - sdpaW/2, y: cy, w: sdpaW, h: sdpaH, color: '#607d8b', label: 'Scaled Dot-Product Attention', node: null}));
   for (var i = 0; i < 3; i++) {
     var srcY = norms[i] ? cy - gapY : projTop + bh;
-    drawConnector(g, [bX[i], srcY, bX[i], srcY + 10, cx, cy], {arrow: false});
+    drawConnector(g, [bX[i], srcY, srcY + 10, cx, cy], {arrow: false});
   }
   cy += sdpaH + gapY;
 
   g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.proj, label: oProj.name, node: oProj}));
-  drawConnector(g, [cx, cy - gapY, cx, cy]);
+  drawConnector(g, [cx, cy - gapY, cy]);
   cy += bh + 16;
 
   var outLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
@@ -316,30 +299,30 @@ function renderMLP(svg, moduleNode) {
 
   g.appendChild(makeBlock({x: lX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'gate_proj', node: gate}));
   g.appendChild(makeBlock({x: rX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'up_proj',   node: up}));
-  drawConnector(g, [cx, cy - 8, cy - 4 , lX, cy], {arrow: false, start_horizontal: false});
-  drawConnector(g, [cx, cy - 8, cy - 4 , rX, cy], {arrow: false, start_horizontal: false});
+  drawConnector(g, [cx, cy - 8, cy - 4, lX, cy], {arrow: false});
+  drawConnector(g, [cx, cy - 8, cy - 4, rX, cy], {arrow: false});
   var projBot = cy + bh;
   cy += bh + gapY;
 
   var siluW = 80, siluH = 34;
   g.appendChild(makeBlock({x: lX - siluW/2, y: cy, w: siluW, h: siluH, color: '#607d8b', label: 'SiLU', node: null}));
-  // drawConnector(g, [lX, projBot, lX, cy]);
+  drawConnector(g, [lX, projBot, cy]);
   var siluBot = cy + siluH;
   cy += siluH + gapY;
 
-  // drawConnector(g, [rX, projBot, rX, cy - gapY + siluH], {arrow: false});
+  drawConnector(g, [rX, projBot, cy - gapY + siluH], {arrow: false});
 
   var mulX = cx - 60, mulCY = cy + 12;
   g.appendChild(S('circle', {cx: mulX, cy: mulCY, r: 13, fill: C.adder, stroke: '#bdbdbd', 'stroke-width': 1}));
   var mt = S('text', {x: mulX, y: mulCY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
   mt.textContent = '\u00D7'; g.appendChild(mt);
 
-  // drawConnector(g, [lX, siluBot, lX, mulCY, mulX - 13, mulCY]);
-  // drawConnector(g, [rX, siluBot, rX, mulCY, mulX + 13, mulCY], {arrow: false});
+  drawConnector(g, [lX, siluBot, mulCY, mulX - 13]);
+  drawConnector(g, [rX, siluBot, mulCY, mulX + 13], {arrow: false});
   cy += 28 + gapY;
 
   g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'down_proj', node: down}));
-  // drawConnector(g, [mulX, mulCY + 13, cx, mulCY + 13, cx, cy]);
+  drawConnector(g, [mulX, mulCY + 13, cx, cy], {start_horizontal: true});
   cy += bh + 16;
 
   var outLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
