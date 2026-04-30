@@ -4,6 +4,7 @@ var viewPath = [];
 var TOOLTIP = document.getElementById('tooltip');
 var TT_IN   = document.getElementById('tt-in');
 var TT_OUT  = document.getElementById('tt-out');
+var TT_DIM  = document.getElementById('tt-dim');
 var ERR_MSG = document.getElementById('error-msg');
 
 function showError(msg) {
@@ -38,23 +39,48 @@ function S(tag, attrs) {
 
 function makeBlock(opts) {
   var g = S('g', {'class': 'block'});
-  g.appendChild(S('rect', {
-    x: opts.x, y: opts.y, width: opts.w, height: opts.h,
-    rx: 6, ry: 6, fill: opts.color, stroke: '#000', 'stroke-width': 1
-  }));
+  var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
+  var node = opts.node;
+
+  if (node && node.type === 'tensor' && node.input_dim !== node.output_dim) {
+    var ratio = node.output_dim / node.input_dim;
+    var topW, botW;
+    if (ratio > 1) {
+      topW = Math.max(w * 0.3, w / ratio);
+      botW = w;
+    } else {
+      topW = w;
+      botW = Math.max(w * 0.3, w * ratio);
+    }
+    var topX = x + (w - topW) / 2;
+    var botX = x + (w - botW) / 2;
+    g.appendChild(S('path', {
+      d: 'M' + topX + ',' + y +
+         ' L' + (topX + topW) + ',' + y +
+         ' L' + (botX + botW) + ',' + (y + h) +
+         ' L' + botX + ',' + (y + h) + ' Z',
+      fill: opts.color, stroke: '#000', 'stroke-width': 1, 'stroke-linejoin': 'round'
+    }));
+  } else {
+    g.appendChild(S('rect', {
+      x: x, y: y, width: w, height: h,
+      rx: 6, ry: 6, fill: opts.color, stroke: '#000', 'stroke-width': 1
+    }));
+  }
+
   var t = S('text', {
-    x: opts.x + opts.w/2, y: opts.y + opts.h/2 + 1,
+    x: x + w/2, y: y + h/2 + 1,
     'text-anchor': 'middle', 'dominant-baseline': 'middle',
     fill: '#fff', 'font-size': 12, 'font-weight': 'bold'
   });
   t.textContent = opts.label;
   g.appendChild(t);
 
-  if (opts.node && opts.onClick) {
-    g.addEventListener('click', function(ev) { ev.stopPropagation(); opts.onClick(opts.node); });
+  if (node && opts.onClick) {
+    g.addEventListener('click', function(ev) { ev.stopPropagation(); opts.onClick(node); });
   }
-  if (opts.node) {
-    g.addEventListener('mouseenter', function(ev) { showTooltip(ev, opts.node); });
+  if (node) {
+    g.addEventListener('mouseenter', function(ev) { showTooltip(ev, node); });
     g.addEventListener('mousemove',  function(ev) { moveTooltip(ev); });
     g.addEventListener('mouseleave', hideTooltip);
   }
@@ -65,7 +91,8 @@ function makeBlock(opts) {
 // points = [startX, startY, ...chain...]  where the chain alternates between
 // V (y-coordinate) and H (x-coordinate) segments. The first segment after
 // the start is V by default; set start_horizontal: true to begin with H.
-function drawConnector(parent, points, opts) {
+function drawConnector(parent, points, opts, width) {
+  width = width || 2;
   opts = opts || {};
   var dashed = opts.dashed || false;
   var color  = opts.color || (dashed ? C.residual : C.arrow);
@@ -77,11 +104,17 @@ function drawConnector(parent, points, opts) {
     horizontal = !horizontal;
   }
 
-  parent.appendChild(S('path', {
-    d: d, stroke: color, 'stroke-width': 2, fill: 'none',
+  var dim = Math.round(width * 100);
+  var path = S('path', {
+    d: d, stroke: color, 'stroke-width': width, fill: 'none',
     'class': 'connector', 'stroke-linejoin': 'round',
-    'stroke-dasharray': dashed ? '6,4' : 'none'
-  }));
+    'stroke-dasharray': dashed ? '6,4' : 'none',
+    'data-dim': dim
+  });
+  path.addEventListener('mouseenter', function(ev) { showConnectorTooltip(ev, dim); });
+  path.addEventListener('mousemove',  function(ev) { moveTooltip(ev); });
+  path.addEventListener('mouseleave', hideTooltip);
+  parent.appendChild(path);
 }
 
 // ─── Tooltip ───
@@ -89,6 +122,9 @@ function showTooltip(ev, node) {
   if (node && node.input_dim != null && node.output_dim != null) {
     TT_IN.textContent = node.input_dim;
     TT_OUT.textContent = node.output_dim;
+    TT_IN.parentElement.style.display = 'block';
+    TT_OUT.parentElement.style.display = 'block';
+    TT_DIM.parentElement.style.display = 'none';
     TOOLTIP.style.display = 'block';
     TOOLTIP.style.left = (ev.pageX + 14) + 'px';
     TOOLTIP.style.top  = (ev.pageY - 24) + 'px';
@@ -99,6 +135,16 @@ function moveTooltip(ev) {
   TOOLTIP.style.top  = (ev.pageY - 24) + 'px';
 }
 function hideTooltip() { TOOLTIP.style.display = 'none'; }
+
+function showConnectorTooltip(ev, dim) {
+  TT_DIM.textContent = dim;
+  TT_IN.parentElement.style.display = 'none';
+  TT_OUT.parentElement.style.display = 'none';
+  TT_DIM.parentElement.style.display = 'block';
+  TOOLTIP.style.display = 'block';
+  TOOLTIP.style.left = (ev.pageX + 14) + 'px';
+  TOOLTIP.style.top  = (ev.pageY - 24) + 'px';
+}
 
 // ─── Render: Top Level ───
 function renderTopLevel(svg, nodes) {
@@ -111,7 +157,7 @@ function renderTopLevel(svg, nodes) {
 
   var g = S('g');
   var cx = W / 2 - blockW / 2;
-  var cy = 20, prevCY = null;
+  var cy = 20, prevCY = null, prevNode = null;
 
   nodes.forEach(function(node) {
     var color = C.embed;
@@ -129,9 +175,11 @@ function renderTopLevel(svg, nodes) {
 
     if (prevCY != null) {
       var mx = cx + blockW / 2;
-      drawConnector(g, [mx, prevCY + blockH, cy]);
+      var connW = prevNode.output_dim / 100;
+      drawConnector(g, [mx, prevCY + blockH, cy], {}, connW);
     }
     prevCY = cy;
+    prevNode = node;
     cy += blockH + gap;
   });
 
@@ -176,7 +224,8 @@ function renderLayer(svg, layerNode) {
   var a1t = S('text', {x: cx, y: add1CY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
   a1t.textContent = '+'; g.appendChild(a1t);
 
-  drawConnector(g, [resX, inputTop, add1CY, cx - 12], {dashed: true});
+  var resW = hidden / 100;
+  drawConnector(g, [resX, inputTop, add1CY, cx - 12], {dashed: true}, resW);
   var r1 = S('text', {x: resX - 8, y: (inputTop + add1CY)/2 + 4, 'text-anchor': 'end', fill: C.residual, 'font-size': 11, 'font-style': 'italic'});
   r1.textContent = 'residual'; g.appendChild(r1);
 
@@ -195,21 +244,22 @@ function renderLayer(svg, layerNode) {
   var a2t = S('text', {x: cx, y: add2CY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
   a2t.textContent = '+'; g.appendChild(a2t);
 
-  drawConnector(g, [resX, add1CY, add2CY, cx - 12], {dashed: true});
+  drawConnector(g, [resX, add1CY, add2CY, cx - 12], {dashed: true}, resW);
   var r2 = S('text', {x: resX - 8, y: (add1CY + add2CY)/2 + 4, 'text-anchor': 'end', fill: C.residual, 'font-size': 11, 'font-style': 'italic'});
   r2.textContent = 'residual'; g.appendChild(r2);
 
-  drawConnector(g, [cx, ln1Bot,    saBot - bh]);
-  drawConnector(g, [cx, saBot,     add1CY - 12]);
-  drawConnector(g, [cx, add1CY+12, ln2Bot - bh]);
-  drawConnector(g, [cx, ln2Bot,    mlpBot - bh]);
-  drawConnector(g, [cx, mlpBot,    add2CY - 12]);
+  var vw = hidden / 100;
+  drawConnector(g, [cx, ln1Bot,    saBot - bh], {}, vw);
+  drawConnector(g, [cx, saBot,     add1CY - 12], {}, vw);
+  drawConnector(g, [cx, add1CY+12, ln2Bot - bh], {}, vw);
+  drawConnector(g, [cx, ln2Bot,    mlpBot - bh], {}, vw);
+  drawConnector(g, [cx, mlpBot,    add2CY - 12], {}, vw);
 
   var outLblY = add2CY + 24;
   var outLbl = S('text', {x: cx, y: outLblY, 'text-anchor': 'middle', fill: '#888', 'font-size': 13});
   outLbl.textContent = 'output  (' + hidden + ')';
   g.appendChild(outLbl);
-  drawConnector(g, [cx, add2CY+12, outLblY - 12]);
+  drawConnector(g, [cx, add2CY+12, outLblY - 12], {}, vw);
 
   svg.appendChild(g);
 }
@@ -241,9 +291,10 @@ function renderSelfAttn(svg, moduleNode) {
   cy = 48;
 
   var projTop = cy;
+  var inDimW = moduleNode.input_dim / 100;
   bX.forEach(function(bx, i) {
     g.appendChild(makeBlock({x: bx - bw/2, y: cy, w: bw, h: bh, color: C.t_sattn, label: projs[i].name, node: projs[i]}));
-    drawConnector(g, [cx, projTop, projTop + 10, bx, cy], {arrow: false});
+    drawConnector(g, [cx, projTop, projTop + 10, bx, cy], {arrow: false}, inDimW);
   });
   cy += bh + gapY;
 
@@ -251,23 +302,24 @@ function renderSelfAttn(svg, moduleNode) {
   bX.forEach(function(bx, i) {
     if (norms[i]) {
       g.appendChild(makeBlock({x: bx - bw/2, y: cy, w: bw - 24, h: bh, color: C.norm, label: norms[i].name, node: norms[i]}));
-      drawConnector(g, [bx, normTop - gapY, cy]);
+      drawConnector(g, [bx, normTop - gapY, cy], {}, projs[i].output_dim / 100);
     }
   });
   cy += bh + gapY;
 
-  drawConnector(g, [bX[2], projTop + bh, cy], {arrow: false});
+  drawConnector(g, [bX[2], projTop + bh, cy], {arrow: false}, vProj.output_dim / 100);
 
   var sdpaW = 220, sdpaH = 42;
   g.appendChild(makeBlock({x: cx - sdpaW/2, y: cy, w: sdpaW, h: sdpaH, color: '#607d8b', label: 'Scaled Dot-Product Attention', node: null}));
   for (var i = 0; i < 3; i++) {
     var srcY = norms[i] ? cy - gapY : projTop + bh;
-    drawConnector(g, [bX[i], srcY, srcY + 10, cx, cy], {arrow: false});
+    var dim = norms[i] ? norms[i].output_dim : projs[i].output_dim;
+    drawConnector(g, [bX[i], srcY, srcY + 10, cx, cy], {arrow: false}, dim / 100);
   }
   cy += sdpaH + gapY;
 
   g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.proj, label: oProj.name, node: oProj}));
-  drawConnector(g, [cx, cy - gapY, cy]);
+  drawConnector(g, [cx, cy - gapY, cy], {}, qProj.output_dim / 100);
   cy += bh + 16;
 
   var outLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
@@ -278,7 +330,7 @@ function renderSelfAttn(svg, moduleNode) {
 
 // ─── Render: MLP Internals ───
 function renderMLP(svg, moduleNode) {
-  var W = 660, H = 400;
+  var W = 660, H = 700;
   svg.setAttribute('width', W);
   svg.setAttribute('height', H);
   svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
@@ -289,41 +341,45 @@ function renderMLP(svg, moduleNode) {
   var up   = children.find(function(c) { return c.name === 'up_proj'; });
   var down = children.find(function(c) { return c.name === 'down_proj'; });
 
-  var bw = 130, bh = 34, gapY = 24;
-  var lX = cx - 140, rX = cx + 140;
+  var bw = 130, bh = 34, gapY = 80, gapX = 100;
+  var lX = cx - gapX, rX = cx + gapX;
 
-  var cy = 25;
+  var cy = 24, inLblH = 24;
   var inLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
   inLbl.textContent = 'input (from layernorm)'; g.appendChild(inLbl);
-  cy = 48;
+  cy = cy + inLblH;
+  drawConnector(g, [cx, cy, cy + gapY/2, lX, cy + gapY], {arrow: false}, gate.input_dim / 100);
+  drawConnector(g, [cx, cy, cy + gapY/2, rX, cy + gapY], {arrow: false}, up.input_dim / 100);
+  cy += gapY;
 
   g.appendChild(makeBlock({x: lX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'gate_proj', node: gate}));
   g.appendChild(makeBlock({x: rX - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'up_proj',   node: up}));
-  drawConnector(g, [cx, cy - 8, cy - 4, lX, cy], {arrow: false});
-  drawConnector(g, [cx, cy - 8, cy - 4, rX, cy], {arrow: false});
+
   var projBot = cy + bh;
   cy += bh + gapY;
 
   var siluW = 80, siluH = 34;
   g.appendChild(makeBlock({x: lX - siluW/2, y: cy, w: siluW, h: siluH, color: '#607d8b', label: 'SiLU', node: null}));
-  drawConnector(g, [lX, projBot, cy]);
+  drawConnector(g, [lX, projBot, cy], {}, gate.output_dim / 100);
   var siluBot = cy + siluH;
   cy += siluH + gapY;
 
-  drawConnector(g, [rX, projBot, cy - gapY + siluH], {arrow: false});
+  drawConnector(g, [rX, projBot, cy - gapY + siluH], {arrow: false}, up.output_dim / 100);
 
-  var mulX = cx - 60, mulCY = cy + 12;
+  var mulX = cx, mulCY = cy + 12;
   g.appendChild(S('circle', {cx: mulX, cy: mulCY, r: 13, fill: C.adder, stroke: '#bdbdbd', 'stroke-width': 1}));
   var mt = S('text', {x: mulX, y: mulCY + 3, 'text-anchor': 'middle', fill: C.adder_text, 'font-size': 15, 'font-weight': 'bold'});
   mt.textContent = '\u00D7'; g.appendChild(mt);
 
-  drawConnector(g, [lX, siluBot, mulCY, mulX - 13]);
-  drawConnector(g, [rX, siluBot, mulCY, mulX + 13], {arrow: false});
-  cy += 28 + gapY;
+  drawConnector(g, [lX, siluBot, mulCY, mulX - 13], {},width = gate.output_dim / 100);
+  drawConnector(g, [rX, siluBot, mulCY, mulX + 13], {},width = up.output_dim / 100);
+  cy += gapY;
 
   g.appendChild(makeBlock({x: cx - bw/2, y: cy, w: bw, h: bh, color: C.t_mlp, label: 'down_proj', node: down}));
-  drawConnector(g, [mulX, mulCY + 13, cx, cy], {start_horizontal: true});
-  cy += bh + 16;
+  drawConnector(g, [mulX, mulCY + 13, cy], {}, down.input_dim / 100);
+  cy += bh;
+  drawConnector(g, [mulX, cy, cy + gapY], {}, down.output_dim / 100);
+  cy += gapY + 20;
 
   var outLbl = S('text', {x: cx, y: cy, 'text-anchor': 'middle', fill: '#888', 'font-size': 12});
   outLbl.textContent = 'output  (' + down.output_dim + ')'; g.appendChild(outLbl);
